@@ -4,8 +4,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./lib/api";
 import { fsEvents } from "./lib/fs-events";
 import { useSessions } from "./state/sessions";
+import { useExplorer } from "./state/explorer";
 import { FileTree } from "./explorer/FileTree";
 import { TermView } from "./term/TermView";
+import { PreviewPane } from "./preview/PreviewPane";
+
+const parentOf = (path: string) => path.split("/").slice(0, -1).join("/");
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -22,9 +26,17 @@ export default function App() {
     if (!workspace.data) return;
     fsEvents.start((path) => {
       void queryClient.invalidateQueries({ queryKey: ["dir", path] });
+      // refresh any open preview whose file lives in the changed directory
+      void queryClient.invalidateQueries({
+        predicate: (q) =>
+          q.queryKey[0] === "preview" &&
+          typeof q.queryKey[1] === "string" &&
+          parentOf(q.queryKey[1]) === path,
+      });
     });
   }, [workspace.data, queryClient]);
 
+  const preview = useExplorer((s) => s.preview);
   const activeTab = tabs.find((t) => t.id === activeId);
   useEffect(() => {
     const name = workspace.data?.name ?? "webcode";
@@ -105,6 +117,14 @@ export default function App() {
             )}
           </div>
         </Panel>
+        {preview && (
+          <>
+            <Separator className="w-px bg-ink-700 transition-colors hover:bg-accent-dim" />
+            <Panel id="preview" defaultSize="35%" minSize="240px" className="min-w-0">
+              <PreviewPane />
+            </Panel>
+          </>
+        )}
       </Group>
       {/* status bar */}
       <div className="flex items-center gap-3 border-t border-ink-700 bg-ink-900 px-3 py-1 text-[11px] text-ink-500">

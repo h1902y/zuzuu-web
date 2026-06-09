@@ -34,7 +34,19 @@ const MIME: Record<string, string> = {
   ".pdf": "application/pdf",
   ".zip": "application/zip",
   ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
   ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".m4a": "audio/mp4",
+  ".aac": "audio/aac",
+  ".flac": "audio/flac",
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
 };
 
 function contentType(file: string): string {

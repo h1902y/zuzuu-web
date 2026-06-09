@@ -58,8 +58,14 @@ packages/
   HttpOnly cookie auth, every fs path through one hardened `safePath` choke point
   (lexical + realpath symlink checks, unit-tested).
 
+- **Preview pane**: third resizable pane, single-click any file — GFM markdown
+  (react-markdown + remark-gfm: tables, task lists, relative images resolved through the
+  daemon), shiki syntax highlighting (lazy chunks), images/SVG, PDF, video/audio
+  (streamed via Range), CSV tables, binary-sniff fallback card. Previews live-refresh
+  when the file changes on disk.
+
 ## Status
 
-v0.1 — terminal (tabs, reattach, flow control, WebGL) + explorer (tree, watch, upload/
-download/zip, rename/delete) working end-to-end. Next: ⌘K file jump, PWA manifest
-(standalone window frees Cmd+W/T), settings, `npm i -g` packaging, SSH-out.
+v0.2 — terminal (tabs, reattach, flow control, WebGL) + explorer (tree, watch, upload/
+download/zip, rename/delete) + file preview pane working end-to-end. Next: ⌘K file jump,
+PWA manifest (standalone window frees Cmd+W/T), settings, `npm i -g` packaging, SSH-out.

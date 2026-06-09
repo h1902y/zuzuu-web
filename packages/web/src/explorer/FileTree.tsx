@@ -13,6 +13,7 @@ interface Row {
   isDir: boolean;
   isSymlink: boolean;
   expanded: boolean;
+  size: number;
 }
 
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
@@ -36,6 +37,7 @@ function buildRows(
         isDir,
         isSymlink: entry.kind === "symlink",
         expanded: isExpanded,
+        size: entry.size,
       });
       if (isExpanded) walk(path, depth + 1);
     }
@@ -72,7 +74,7 @@ function EntryIcon({ row }: { row: Row }) {
 
 export function FileTree() {
   const queryClient = useQueryClient();
-  const { expanded, selected, toggle, select } = useExplorer();
+  const { expanded, selected, toggle, select, openPreview } = useExplorer();
   const createSession = useSessions((s) => s.create);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -201,9 +203,7 @@ export function FileTree() {
                 onClick={() => {
                   select(row.path);
                   if (row.isDir) toggle(row.path);
-                }}
-                onDoubleClick={() => {
-                  if (!row.isDir) onDownload(row);
+                  else openPreview({ path: row.path, name: row.name, size: row.size });
                 }}
               >
                 {row.isDir ? (

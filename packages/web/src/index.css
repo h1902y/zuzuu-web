@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 @import "@fontsource-variable/jetbrains-mono";
 @import "@xterm/xterm/css/xterm.css";
 
@@ -36,6 +37,58 @@ body {
 }
 .term-host .xterm {
   padding: 8px 0 0 10px;
+}
+
+/* ── preview pane: prose + GFM tables tuned to the ink/accent palette ── */
+.prose {
+  --tw-prose-invert-body: var(--color-ink-100);
+  --tw-prose-invert-headings: #fff;
+  --tw-prose-invert-links: var(--color-accent);
+  --tw-prose-invert-code: var(--color-accent);
+  --tw-prose-invert-quotes: var(--color-ink-300);
+  --tw-prose-invert-quote-borders: var(--color-ink-700);
+  --tw-prose-invert-hr: var(--color-ink-700);
+  --tw-prose-invert-th-borders: var(--color-ink-500);
+  --tw-prose-invert-td-borders: var(--color-ink-700);
+}
+.prose table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.prose thead th {
+  background: var(--color-ink-800);
+  border: 1px solid var(--color-ink-700);
+  padding: 5px 10px;
+}
+.prose tbody td {
+  border: 1px solid var(--color-ink-700);
+  padding: 5px 10px;
+}
+.prose tbody tr:nth-child(even) {
+  background: var(--color-ink-850);
+}
+.prose :not(pre) > code {
+  background: var(--color-ink-800);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-weight: 400;
+}
+.prose :not(pre) > code::before,
+.prose :not(pre) > code::after {
+  content: none;
+}
+.prose input[type="checkbox"] {
+  accent-color: var(--color-accent);
+}
+
+/* shiki emits its own inline-styled <pre> */
+.shiki-block pre {
+  background: var(--color-ink-950) !important;
+  border: 1px solid var(--color-ink-700);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
 }
 
 ::-webkit-scrollbar {
