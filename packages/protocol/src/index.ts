@@ -129,6 +129,45 @@ export interface WorkspaceInfo {
   version: string;
 }
 
+// ── Health / onboarding / vault picker ──────────────────────────────────
+export interface HealthResponse {
+  ok: true;
+  version: string;
+  uptimeMs: number;
+  /** resident set size in bytes */
+  rss: number;
+  root: string;
+  name: string;
+}
+
+export interface WorkspaceConfig {
+  onboarded: boolean;
+  /** recent workspace roots, most-recent-first */
+  recent: string[];
+}
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+}
+
+export interface BrowseResponse {
+  /** the absolute directory being listed */
+  path: string;
+  /** parent directory, or null at the filesystem root */
+  parent: string | null;
+  dirs: BrowseEntry[];
+}
+
+export interface SwitchRequest {
+  path: string;
+}
+
+export interface MkdirInRequest {
+  parent: string;
+  name: string;
+}
+
 // ── Filesystem events WS (/ws/fs) — JSON text frames ────────────────────
 export type FsClientMessage =
   | { type: "watch"; path: string }

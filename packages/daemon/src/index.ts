@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { WebcodeServer } from "./server.js";
+import { addRecent } from "./config.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 7770;
@@ -115,6 +116,7 @@ async function main(): Promise<void> {
     await fsp.readFile(path.resolve(HERE, "..", "package.json"), "utf8"),
   ) as { version: string };
   const token = args.token ?? crypto.randomBytes(24).toString("base64url");
+  await addRecent(root).catch(() => {}); // remember this workspace
   const port = await findFreePort(args.port, args.host);
   const webDist = path.resolve(HERE, "..", "..", "web", "dist");
 

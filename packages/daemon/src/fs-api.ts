@@ -76,8 +76,16 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return results;
 }
 
-export function createFsApi(root: string): Hono {
+export function createFsApi(getRoot: () => string): Hono {
   const app = new Hono();
+
+  // resolve the (mutable) workspace root once per request, so handlers below
+  // keep referencing a stable `root` while the daemon can re-root at runtime.
+  let root = getRoot();
+  app.use("*", async (_c, next) => {
+    root = getRoot();
+    await next();
+  });
 
   app.onError((err, c) => {
     if (err instanceof PathError) return c.json({ error: err.message }, 403);

@@ -15,8 +15,22 @@ import { useEditor } from "./state/editor";
 import { CommandPalette } from "./palette/CommandPalette";
 import { WorkflowSaveModal, WorkflowRunModal } from "./workflows/WorkflowModals";
 import { termRegistry } from "./term/registry";
+import { useConnection } from "./state/connection";
+import { DisconnectedBanner } from "./DisconnectedBanner";
+import { WelcomeOverlay } from "./onboarding/WelcomeOverlay";
+import { VaultPicker } from "./onboarding/VaultPicker";
 
 const parentOf = (path: string) => path.split("/").slice(0, -1).join("/");
+
+function fmtUptime(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ${m % 60}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+const fmtMB = (bytes: number) => `${Math.round(bytes / 1024 / 1024)} MB`;
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -24,6 +38,12 @@ export default function App() {
   const [initError, setInitError] = useState<string | null>(null);
 
   const workspace = useQuery({ queryKey: ["workspace"], queryFn: api.workspace });
+  const conn = useConnection();
+  const wsConfig = useQuery({ queryKey: ["workspace", "config"], queryFn: api.workspaceConfig });
+  const gitStatus = useQuery({ queryKey: ["git", "status"], queryFn: api.gitStatus, refetchInterval: 4000 });
+  const files = useQuery({ queryKey: ["files"], queryFn: api.listFiles, staleTime: 30_000 });
+  const [vaultPickerOpen, setVaultPickerOpen] = useState(false);
+  const [vaultMenuOpen, setVaultMenuOpen] = useState(false);
 
   useEffect(() => {
     init().catch((err: Error) => setInitError(err.message));
@@ -69,13 +89,32 @@ export default function App() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
         saveActive();
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        setVaultPickerOpen(true);
       } else if (e.key === "Escape") {
         setPaletteOpen(false);
       }
     };
+    const onOpenPicker = () => setVaultPickerOpen(true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("webcode:open-vault-picker", onOpenPicker);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("webcode:open-vault-picker", onOpenPicker);
+    };
   }, [saveActive, paletteMode]);
+
+  // Switch the daemon's workspace, then reload into it (token cookie persists).
+  const switchVault = async (path: string) => {
+    setVaultMenuOpen(false);
+    try {
+      await api.switchWorkspace(path);
+      window.location.reload();
+    } catch (err) {
+      window.alert(`Could not open vault: ${(err as Error).message}`);
+    }
+  };
 
   // A workflow with args opens the run modal; argless ones run immediately.
   const handleRunWorkflow = (wf: Workflow) => {
@@ -117,8 +156,11 @@ export default function App() {
     );
   }
 
+  const dirtyCount = gitStatus.data?.entries.length ?? 0;
+
   return (
     <div className="flex h-full flex-col">
+      <DisconnectedBanner state={conn.state} />
       <Group orientation="horizontal" className="min-h-0 flex-1">
         <Panel defaultSize="22%" minSize="160px" maxSize="45%" className="bg-ink-900">
           <div className="flex h-full flex-col">
@@ -225,9 +267,70 @@ export default function App() {
         )}
       </Group>
       {/* status bar */}
-      <div className="flex items-center gap-3 border-t border-ink-700 bg-ink-900 px-3 py-1 text-[11px] text-ink-500">
-        <span className="text-accent-dim">❯_ webcode</span>
-        <span className="truncate">{workspace.data?.root}</span>
+      <div className="relative flex items-center gap-2.5 border-t border-ink-700 bg-ink-900 px-3 py-1 text-[11px] text-ink-500">
+        {/* connection health */}
+        <span
+          className="flex shrink-0 items-center gap-1.5"
+          title={`daemon ${conn.state}`}
+        >
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              conn.state === "connected"
+                ? "bg-accent"
+                : conn.state === "reconnecting"
+                  ? "animate-pulse bg-yellow-500"
+                  : "bg-danger"
+            }`}
+          />
+          <span className="text-accent-dim">❯_</span>
+        </span>
+
+        {/* vault name → vault menu */}
+        <div className="relative shrink-0">
+          <button
+            onClick={() => setVaultMenuOpen((v) => !v)}
+            className="rounded px-1 text-ink-300 hover:text-accent"
+            title={workspace.data?.root}
+          >
+            {workspace.data?.name ?? "…"} ▾
+          </button>
+          {vaultMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setVaultMenuOpen(false)} />
+              <div className="absolute bottom-full left-0 z-50 mb-1 w-64 overflow-hidden rounded border border-ink-700 bg-ink-850 py-1 shadow-xl">
+                <button
+                  onClick={() => {
+                    setVaultMenuOpen(false);
+                    setVaultPickerOpen(true);
+                  }}
+                  className="block w-full px-3 py-1.5 text-left text-[12px] text-ink-100 hover:bg-ink-700"
+                >
+                  Switch vault… <span className="text-ink-500">⌘⇧O</span>
+                </button>
+                {(wsConfig.data?.recent ?? []).filter((r) => r !== workspace.data?.root).length > 0 && (
+                  <div className="mt-1 border-t border-ink-700 pt-1">
+                    <div className="px-3 py-0.5 text-[10px] uppercase tracking-wider text-ink-500">Recent</div>
+                    {(wsConfig.data?.recent ?? [])
+                      .filter((r) => r !== workspace.data?.root)
+                      .slice(0, 6)
+                      .map((r) => (
+                        <button
+                          key={r}
+                          onClick={() => void switchVault(r)}
+                          className="block w-full truncate px-3 py-1 text-left text-[12px] text-ink-300 hover:bg-ink-700 hover:text-ink-100"
+                          title={r}
+                        >
+                          {r.replace(/^\/Users\/[^/]+/, "~")}
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* cwd */}
         {activeTab?.cwdLive && (
           <button
             title="Reveal in file tree"
@@ -237,21 +340,43 @@ export default function App() {
                 revealPath(activeTab.cwdLive!.cwd);
               }
             }}
-            className="truncate text-ink-300 hover:text-accent"
+            className="shrink-0 truncate text-ink-300 hover:text-accent"
           >
             ❯ {activeTab.cwdLive.outside
-              ? `${activeTab.cwdLive.cwd} (outside workspace)`
+              ? `${activeTab.cwdLive.cwd} (outside)`
               : `./${activeTab.cwdLive.cwd}`}
           </button>
         )}
+
+        {/* git branch + dirty count */}
+        {gitStatus.data?.repo && (
+          <button
+            onClick={() => setSidebarMode("git")}
+            className="shrink-0 hover:text-accent"
+            title="Source Control"
+          >
+            ⎇ {gitStatus.data.branch}
+            {dirtyCount > 0 && <span className="ml-1 text-yellow-500">±{dirtyCount}</span>}
+          </button>
+        )}
+
+        {/* right side: stats */}
+        <span className="ml-auto shrink-0">
+          {files.data ? `${files.data.files.length}${files.data.truncated ? "+" : ""} files` : "…"}
+        </span>
+        <span className="shrink-0">{tabs.filter((t) => t.alive).length} session(s)</span>
+        {conn.uptimeMs !== null && (
+          <span className="shrink-0 text-ink-600" title="daemon uptime · memory">
+            {fmtUptime(conn.uptimeMs)} · {conn.rss !== null ? fmtMB(conn.rss) : ""}
+          </span>
+        )}
         <button
           onClick={() => setPaletteOpen(true)}
-          className="ml-auto shrink-0 rounded px-1.5 text-ink-500 hover:text-accent"
+          className="shrink-0 rounded px-1.5 text-ink-500 hover:text-accent"
           title="Command palette"
         >
           ⌘K
         </button>
-        <span className="shrink-0">{tabs.filter((t) => t.alive).length} session(s)</span>
       </div>
 
       <CommandPalette
@@ -262,6 +387,25 @@ export default function App() {
       />
       <WorkflowSaveModal />
       <WorkflowRunModal workflow={runWorkflow} onClose={() => setRunWorkflow(null)} />
+
+      {vaultPickerOpen && (
+        <VaultPicker
+          recent={wsConfig.data?.recent ?? []}
+          currentRoot={workspace.data?.root}
+          onClose={() => setVaultPickerOpen(false)}
+          onPick={switchVault}
+        />
+      )}
+      {wsConfig.data && !wsConfig.data.onboarded && (
+        <WelcomeOverlay
+          workspaceName={workspace.data?.name}
+          onOpenVaultPicker={() => setVaultPickerOpen(true)}
+          onDismiss={() => {
+            void api.setOnboarded();
+            void queryClient.invalidateQueries({ queryKey: ["workspace", "config"] });
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,14 +1,17 @@
 import type {
+  BrowseResponse,
   CreateSessionRequest,
   FileListResponse,
   GitDiffResponse,
   GitStatusResponse,
+  HealthResponse,
   HistoryResponse,
   ListResponse,
   SearchResponse,
   SessionInfo,
   Workflow,
   WorkflowListResponse,
+  WorkspaceConfig,
   WorkspaceInfo,
 } from "@webcode/protocol";
 
@@ -102,6 +105,17 @@ export const api = {
   // shell history + quick-fix actions
   history: () => request<HistoryResponse>("/api/history"),
   killPort: (port: number) => request<{ ok: true }>("/api/fix/kill-port", json({ port })),
+
+  // health + onboarding + vault picker
+  health: () => request<HealthResponse>("/api/health"),
+  workspaceConfig: () => request<WorkspaceConfig>("/api/workspace/config"),
+  setOnboarded: () => request<{ ok: true }>("/api/workspace/onboarded", { method: "POST" }),
+  browse: (path?: string) =>
+    request<BrowseResponse>(`/api/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+  browseMkdir: (parent: string, name: string) =>
+    request<{ ok: true; path: string }>("/api/browse/mkdir", json({ parent, name })),
+  switchWorkspace: (path: string) =>
+    request<{ ok: true; root: string }>("/api/workspace/switch", json({ path })),
 };
 
 export function wsUrl(path: string): string {

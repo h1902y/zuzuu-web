@@ -25,6 +25,8 @@ import { listFiles } from "./file-list.js";
 import { listWorkflows, saveWorkflow } from "./workflows.js";
 import * as git from "./git.js";
 import { shellHistory } from "./history.js";
+import * as config from "./config.js";
+import { listDirs, mkdirIn } from "./browse.js";
 
 const execFileAsync = promisify(execFile);
 import { handleTermSocket } from "./ws-term.js";
@@ -61,13 +63,17 @@ const STATIC_MIME: Record<string, string> = {
 
 export class WebcodeServer {
   readonly app: Hono;
-  readonly sessions: SessionManager;
+  sessions: SessionManager;
+  /** mutable workspace root — switchable at runtime via switchTo() */
+  private root: string;
+  private readonly startedAt = Date.now();
   private readonly authSessions = new Set<string>();
   private readonly allowedHosts: Set<string>;
   private readonly allowedOrigins: Set<string>;
   private server: ServerType | null = null;
 
   constructor(private readonly cfg: ServerConfig) {
+    this.root = cfg.root;
     this.sessions = new SessionManager(cfg.root);
     const hostNames = ["127.0.0.1", "localhost", "[::1]"];
     this.allowedHosts = new Set(hostNames.flatMap((h) => [h, `${h}:${cfg.port}`]));
@@ -76,6 +82,21 @@ export class WebcodeServer {
       ...(cfg.extraOrigins ?? []),
     ]);
     this.app = this.buildApp();
+  }
+
+  /**
+   * Re-root the live daemon onto a new workspace. Tears down all terminal
+   * sessions (like reloading an Obsidian vault) and rebuilds the manager;
+   * fs watchers belong to client sockets and clean up when the client reloads.
+   */
+  async switchTo(newRoot: string): Promise<void> {
+    const resolved = await fsp.realpath(path.resolve(newRoot));
+    const st = await fsp.stat(resolved);
+    if (!st.isDirectory()) throw new Error("not a directory");
+    this.sessions.shutdown();
+    this.sessions = new SessionManager(resolved);
+    this.root = resolved;
+    await config.addRecent(resolved);
   }
 
   // ── security gates ─────────────────────────────────────────────────
@@ -140,8 +161,8 @@ export class WebcodeServer {
 
     app.get("/api/workspace", (c) => {
       const body: WorkspaceInfo = {
-        root: cfg.root,
-        name: path.basename(cfg.root) || cfg.root,
+        root: this.root,
+        name: path.basename(this.root) || this.root,
         version: cfg.version,
       };
       return c.json(body);
@@ -156,7 +177,7 @@ export class WebcodeServer {
       } catch {
         // empty body is fine
       }
-      const cwd = body.cwd ? safeJoin(cfg.root, body.cwd) : cfg.root;
+      const cwd = body.cwd ? safeJoin(this.root, body.cwd) : this.root;
       const session = this.sessions.create(cwd, body.cols, body.rows);
       return c.json(session.info(), 201);
     });
@@ -180,7 +201,7 @@ export class WebcodeServer {
       if (!body.path?.endsWith(".cast")) return c.json({ error: "path must end in .cast" }, 400);
       let abs: string;
       try {
-        abs = await resolveSafe(cfg.root, body.path);
+        abs = await resolveSafe(this.root, body.path);
       } catch (err) {
         if (err instanceof PathError) return c.json({ error: err.message }, 403);
         throw err;
@@ -195,7 +216,7 @@ export class WebcodeServer {
       if (!query) return c.json({ error: "q required" }, 400);
       let searchRoot: string;
       try {
-        searchRoot = await resolveSafe(cfg.root, c.req.query("path") ?? "");
+        searchRoot = await resolveSafe(this.root, c.req.query("path") ?? "");
       } catch (err) {
         if (err instanceof PathError) return c.json({ error: err.message }, 403);
         throw err;
@@ -203,7 +224,7 @@ export class WebcodeServer {
       const res = await search({
         query,
         searchRoot,
-        root: cfg.root,
+        root: this.root,
         regex: c.req.query("regex") === "1",
         caseSensitive: c.req.query("case") === "1",
       });
@@ -212,11 +233,11 @@ export class WebcodeServer {
 
     app.get("/api/files", async (c) => {
       const limit = Math.min(Number(c.req.query("limit")) || 5000, 20000);
-      return c.json(await listFiles(cfg.root, limit));
+      return c.json(await listFiles(this.root, limit));
     });
 
     app.get("/api/workflows", async (c) => {
-      return c.json({ workflows: await listWorkflows(cfg.root) });
+      return c.json({ workflows: await listWorkflows(this.root) });
     });
 
     app.post("/api/workflows", async (c) => {
@@ -229,28 +250,28 @@ export class WebcodeServer {
       if (!wf.name?.trim() || !wf.command?.trim()) {
         return c.json({ error: "name and command required" }, 400);
       }
-      const path = await saveWorkflow(cfg.root, wf);
+      const path = await saveWorkflow(this.root, wf);
       return c.json({ ok: true, path });
     });
 
     // ── git ──────────────────────────────────────────────────────────
-    app.get("/api/git/status", async (c) => c.json(await git.status(cfg.root)));
+    app.get("/api/git/status", async (c) => c.json(await git.status(this.root)));
 
     app.get("/api/git/diff", async (c) => {
       const p = c.req.query("path") ?? "";
       if (!p) return c.json({ error: "path required" }, 400);
-      return c.json({ original: await git.diffOriginal(cfg.root, p) });
+      return c.json({ original: await git.diffOriginal(this.root, p) });
     });
 
     app.post("/api/git/stage", async (c) => {
       const { paths } = await c.req.json<{ paths: string[] }>();
-      await git.stage(cfg.root, Array.isArray(paths) ? paths : []);
+      await git.stage(this.root, Array.isArray(paths) ? paths : []);
       return c.json({ ok: true });
     });
 
     app.post("/api/git/unstage", async (c) => {
       const { paths } = await c.req.json<{ paths: string[] }>();
-      await git.unstage(cfg.root, Array.isArray(paths) ? paths : []);
+      await git.unstage(this.root, Array.isArray(paths) ? paths : []);
       return c.json({ ok: true });
     });
 
@@ -258,7 +279,7 @@ export class WebcodeServer {
       const { message } = await c.req.json<{ message: string }>();
       if (!message?.trim()) return c.json({ error: "message required" }, 400);
       try {
-        await git.commit(cfg.root, message.trim());
+        await git.commit(this.root, message.trim());
       } catch (err) {
         return c.json({ error: (err as Error).message }, 400);
       }
@@ -289,7 +310,58 @@ export class WebcodeServer {
       }
     });
 
-    app.route("/api/fs", createFsApi(cfg.root));
+    // ── health / onboarding / vault picker ─────────────────────────────
+    app.get("/api/health", (c) =>
+      c.json({
+        ok: true,
+        version: cfg.version,
+        uptimeMs: Date.now() - this.startedAt,
+        rss: process.memoryUsage().rss,
+        root: this.root,
+        name: path.basename(this.root) || this.root,
+      }),
+    );
+
+    app.get("/api/workspace/config", async (c) => {
+      const conf = await config.load();
+      return c.json({ onboarded: conf.onboarded, recent: conf.recent });
+    });
+
+    app.post("/api/workspace/onboarded", async (c) => {
+      await config.setOnboarded();
+      return c.json({ ok: true });
+    });
+
+    app.get("/api/browse", async (c) => {
+      try {
+        return c.json(await listDirs(c.req.query("path")));
+      } catch (err) {
+        return c.json({ error: (err as Error).message }, 400);
+      }
+    });
+
+    app.post("/api/browse/mkdir", async (c) => {
+      const { parent, name } = await c.req.json<{ parent: string; name: string }>();
+      try {
+        const dir = await mkdirIn(parent, name);
+        return c.json({ ok: true, path: dir });
+      } catch (err) {
+        return c.json({ error: (err as Error).message }, 400);
+      }
+    });
+
+    app.post("/api/workspace/switch", async (c) => {
+      const { path: target } = await c.req.json<{ path: string }>();
+      if (!target) return c.json({ error: "path required" }, 400);
+      try {
+        await this.switchTo(target);
+      } catch (err) {
+        return c.json({ error: (err as Error).message }, 400);
+      }
+      return c.json({ ok: true, root: this.root });
+    });
+
+    app.route("/api/fs", createFsApi(() => this.root));
 
     // Static SPA with index.html fallback
     app.get("*", async (c) => {
@@ -348,7 +420,8 @@ export class WebcodeServer {
         return;
       }
       if (url.pathname === "/ws/fs") {
-        wss.handleUpgrade(req, socket, head, (ws) => handleFsSocket(ws, cfg.root));
+        wss.handleUpgrade(req, socket, head, (ws) => handleFsSocket(ws, this.root));
+        // ^ this.root read at upgrade time → new connections (post-switch) use the new root
         return;
       }
       reject(404, "Not Found");

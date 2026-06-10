@@ -173,6 +173,17 @@ export function CommandPalette({
               </Item>
             </Command.Group>
           )}
+
+          {!historyOnly && (
+            <Command.Group heading="Workspace">
+              <Item
+                value="switch vault workspace open folder"
+                onSelect={() => run(() => window.dispatchEvent(new Event("webcode:open-vault-picker")))}
+              >
+                <Kind>vault</Kind> Switch vault… <span className="ml-2 text-ink-500">⌘⇧O</span>
+              </Item>
+            </Command.Group>
+          )}
         </Command.List>
       </Command>
     </div>
