@@ -9,7 +9,7 @@ sessions survive page reloads, output never freezes the tab, and nothing leaves 
 
 ## The zuzuu Faculties dashboard
 
-Run zuzuu-web rooted at a project that has a [zuzuu](https://github.com/h1902y/motorsandsensors)
+Run zuzuu-web rooted at a project that has a [zuzuu](https://github.com/h1902y/zuzuu)
 `agent/` home, then switch to the **Faculties** view (the `Code | Faculties` toggle in the status
 bar) for a **read-only** look at where the agent is in its graduation loop:
 
