@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { describeZuzuuError, isCliAbsent, zuzuuApi } from "../lib/zuzuu-api";
 import { useReviewOpen } from "../state/review";
@@ -83,10 +83,16 @@ function ReviewCeremony({ onClose }: { onClose: () => void }) {
     }
   }, [queryClient]);
 
-  // Reaching the end with approvals → mint once, automatically.
+  // Reaching the end with approvals → mint once, automatically. The ref is a
+  // belt-and-braces guard against any future re-fire (e.g. a phase reset);
+  // explicit retry bypasses it by calling runMint directly.
   const done = state !== null && isDone(state);
+  const mintStarted = useRef(false);
   useEffect(() => {
-    if (done && approvedIds.length > 0 && mint.phase === "idle") void runMint(approvedIds);
+    if (done && approvedIds.length > 0 && mint.phase === "idle" && !mintStarted.current) {
+      mintStarted.current = true;
+      void runMint(approvedIds);
+    }
   }, [done, approvedIds, mint.phase, runMint]);
 
   const item = state ? currentItem(state) : null;
