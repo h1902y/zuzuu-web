@@ -1,16 +1,23 @@
-// /api/zuzuu/* — read-only observe routes over a project's zuzuu `.zuzuu/` home.
-// Raw data (proposals, generations, sessions, digest) is read from disk; computed
-// views (status, inbox, generation diff) shell out to `zuzuu <cmd> --json` and
-// fall back to file-reads when the binary is absent. Mirrors fs-api.ts.
+// /api/zuzuu/* — observe + act routes over a project's zuzuu `.zuzuu/` home.
+// Reads: raw data (proposals, generations, sessions, digest) comes from disk;
+// computed views (status, inbox, eval, generation diff) shell out to
+// `zuzuu <cmd> --json` and fall back to file-reads when the binary is absent.
+// Writes: mutations (approve/reject, mint, rollback) are CLI-ONLY — the daemon
+// never reimplements faculty writes; no CLI → 503. Mirrors fs-api.ts.
 
 import fsp from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { PathError, resolveSafe } from "./safe-path.js";
 
 const FACULTIES = ["knowledge", "memory", "actions", "instructions", "guardrails"] as const;
+
+/** Ids/slugs/generation-ids that may ride into a zuzuu argv. Validated BEFORE any spawn. */
+const SAFE_ID = /^[a-z0-9][a-z0-9._-]*$/i;
+const MAX_REASON_LEN = 500;
 
 interface RunOpts { binary?: string; timeoutMs?: number; }
 interface ApiOpts { binary?: string; }
@@ -208,6 +215,86 @@ export function createZuzuuApi(getRoot: () => string, opts: ApiOpts = {}): Hono 
     const viaCli = await runZuzuu(root, ["generation", "show", id], { binary: opts.binary });
     if (viaCli) return c.json(viaCli);
     return c.json({ error: "generation diff needs the zuzuu CLI" }, 503);
+  });
+
+  // ── Write side: mutations are CLI-only — every route below shells out to
+  // `zuzuu … --json` via runZuzuuMut and never touches faculty files itself.
+
+  const readBody = async (c: Context): Promise<Record<string, unknown>> => {
+    try { const b = await c.req.json(); return b && typeof b === "object" ? b as Record<string, unknown> : {}; }
+    catch { return {}; }
+  };
+  /** Run a mutation and map the result: absent → 503, failed → 502, success → 200 + CLI JSON. */
+  const mutate = async (c: Context, args: string[]) => {
+    const r = await runZuzuuMut(root, args, { binary: opts.binary });
+    if (!r.ok) {
+      return r.code === "absent"
+        ? c.json({ error: "zuzuu CLI required" }, 503)
+        : c.json({ error: "zuzuu command failed", stderr: r.stderr ?? "" }, 502);
+    }
+    return c.json(r.data as Record<string, unknown>);
+  };
+  const isFaculty = (f: unknown): f is typeof FACULTIES[number] =>
+    typeof f === "string" && (FACULTIES as readonly string[]).includes(f);
+
+  app.post("/proposals/:id/approve", async (c) => {
+    const id = c.req.param("id");
+    if (!SAFE_ID.test(id)) return c.json({ error: "bad id" }, 400);
+    const { faculty } = await readBody(c);
+    if (!isFaculty(faculty)) return c.json({ error: "bad faculty" }, 400);
+    return mutate(c, ["proposals", "approve", id, "--faculty", faculty]);
+  });
+
+  app.post("/proposals/:id/reject", async (c) => {
+    const id = c.req.param("id");
+    if (!SAFE_ID.test(id)) return c.json({ error: "bad id" }, 400);
+    const { faculty, reason } = await readBody(c);
+    if (!isFaculty(faculty)) return c.json({ error: "bad faculty" }, 400);
+    if (reason !== undefined && (typeof reason !== "string" || reason.length > MAX_REASON_LEN))
+      return c.json({ error: "bad reason" }, 400);
+    // reason rides as ONE argv element — spawn arrays make shell-meta inert
+    return mutate(c, ["proposals", "reject", id, "--faculty", faculty, ...(reason ? ["--reason", reason] : [])]);
+  });
+
+  for (const verb of ["approve", "reject"] as const) {
+    app.post(`/actions/:slug/${verb}`, async (c) => {
+      const slug = c.req.param("slug");
+      if (!SAFE_ID.test(slug)) return c.json({ error: "bad slug" }, 400);
+      return mutate(c, ["act", verb, slug]);
+    });
+  }
+
+  app.post("/generation/mint", async (c) => {
+    const { from } = await readBody(c);
+    if (from !== undefined &&
+        (!Array.isArray(from) || !from.every((f) => typeof f === "string" && SAFE_ID.test(f))))
+      return c.json({ error: "bad from ids" }, 400);
+    const fromIds = (from as string[] | undefined) ?? [];
+    return mutate(c, ["generation", "mint", ...(fromIds.length ? ["--from", fromIds.join(",")] : [])]);
+  });
+
+  app.post("/generation/:id/rollback", async (c) => {
+    const id = c.req.param("id");
+    if (!SAFE_ID.test(id)) return c.json({ error: "bad id" }, 400);
+    return mutate(c, ["generation", "rollback", id]);
+  });
+
+  app.get("/eval", async (c) => {
+    const viaCli = await runZuzuu(root, ["eval"], { binary: opts.binary });
+    if (viaCli) return c.json(viaCli);
+    // Fallback: pending proposals, unranked (no CLI → no scoring).
+    const agent = await agentDir();
+    const ranked = [];
+    for (const key of FACULTIES)
+      for (const p of await proposalsOf(agent, key))
+        ranked.push({ id: String(p.id ?? "?"), faculty: key, title: proposalTitle(p), score: null, confidence: null, rationale: null });
+    return c.json({ ranked });
+  });
+
+  app.get("/hosts", async (c) => {
+    const data = await runZuzuu(root, ["status"], { binary: opts.binary });
+    const hosts = (data as { hosts?: { name: string }[] } | null)?.hosts ?? [];
+    return c.json({ hosts, cliAbsent: data === null });
   });
 
   return app;

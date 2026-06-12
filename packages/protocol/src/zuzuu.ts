@@ -67,3 +67,54 @@ export interface SessionsResponse {
 export interface DigestResponse {
   text: string;
 }
+
+// ── Write side (mutations are CLI-only; the daemon shells out to zuzuu) ──
+
+/** GET /eval — a proposal as ranked by `zuzuu eval`; nulls when the CLI is
+ *  absent and the daemon fell back to an unranked file-read listing. */
+export interface RankedProposal {
+  id: string;
+  faculty: string;
+  title: string;
+  score: number | null;
+  confidence: string | null;
+  rationale: string | null;
+}
+
+export interface EvalResponse {
+  ranked: RankedProposal[];
+}
+
+/** GET /hosts — from `zuzuu status`; cliAbsent means the CLI wasn't runnable. */
+export interface HostsResponse {
+  hosts: { name: string }[];
+  cliAbsent: boolean;
+}
+
+/** POST /proposals/:id/approve and /actions/:slug/approve */
+export interface ApproveResult {
+  ok: boolean;
+  action?: string;
+  itemIds?: string[];
+  warnings?: string[];
+}
+
+/** POST /proposals/:id/reject and /actions/:slug/reject */
+export interface RejectResult {
+  ok: boolean;
+  id?: string;
+}
+
+/** POST /generation/mint */
+export interface MintResult {
+  id: string;
+  mintedFrom: string[];
+  forkedFrom: string | null;
+}
+
+/** POST /generation/:id/rollback */
+export interface RollbackResult {
+  ok: boolean;
+  restored: number;
+  active: string;
+}
