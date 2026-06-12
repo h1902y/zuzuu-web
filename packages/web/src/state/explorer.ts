@@ -9,7 +9,7 @@ export interface PreviewTarget {
   size?: number;
 }
 
-export type SidebarMode = "files" | "search" | "git";
+export type SidebarMode = "files" | "search" | "git" | "agent";
 
 interface ExplorerState {
   /** workspace-relative paths of expanded dirs ("" = root, always expanded) */

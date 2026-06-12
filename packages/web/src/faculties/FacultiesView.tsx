@@ -10,7 +10,6 @@ import { FacultyDetail } from "./FacultyDetail";
 import { GenerationsTimeline } from "./GenerationsTimeline";
 import { SessionsList } from "./SessionsList";
 import { DigestPanel } from "./DigestPanel";
-import { ReviewFlow } from "./ReviewFlow";
 
 /** The Home surface: the zuzuu faculties dashboard (observe + review), or the
  *  set-up-zuzuu onboarding card when this project has no home yet. */
@@ -42,7 +41,6 @@ export function FacultiesView() {
         <SessionsList />
         <DigestPanel />
       </div>
-      <ReviewFlow />
     </div>
   );
 }

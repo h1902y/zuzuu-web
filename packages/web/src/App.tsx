@@ -9,6 +9,8 @@ import { useExplorer } from "./state/explorer";
 import { FileTree } from "./explorer/FileTree";
 import { SearchPanel } from "./explorer/SearchPanel";
 import { GitPanel } from "./explorer/GitPanel";
+import { AgentPanel } from "./explorer/AgentPanel";
+import { agentChipLabel } from "./explorer/agent-panel-logic";
 import { TermView } from "./term/TermView";
 import { EditorPane } from "./editor/EditorPane";
 import { useEditor } from "./state/editor";
@@ -23,6 +25,10 @@ import { VaultPicker } from "./onboarding/VaultPicker";
 import { Bar, ModeTabs, Tab, TabBar, IconButton, StatusDot, DialogHost, prompt, ActionMenu, type MenuItem } from "./components/ui";
 import { useView } from "./state/view";
 import { FacultiesView } from "./faculties/FacultiesView";
+import { ReviewFlow } from "./faculties/ReviewFlow";
+import { useReviewOpen } from "./state/review";
+import { pendingReviewCount } from "./faculties/review-queue";
+import { zuzuuApi } from "./lib/zuzuu-api";
 
 const parentOf = (path: string) => path.split("/").slice(0, -1).join("/");
 
@@ -46,6 +52,17 @@ export default function App() {
   const wsConfig = useQuery({ queryKey: ["workspace", "config"], queryFn: api.workspaceConfig });
   const gitStatus = useQuery({ queryKey: ["git", "status"], queryFn: api.gitStatus, refetchInterval: 4000, placeholderData: keepPreviousData });
   const files = useQuery({ queryKey: ["files"], queryFn: api.listFiles, staleTime: 30_000, placeholderData: keepPreviousData });
+
+  // zuzuu agent chip: health gates everything; status + the combined review
+  // count (same queue the ceremony walks). fs events refresh these; the
+  // refetchIntervals are the fallback.
+  const zuzuuHealth = useQuery({ queryKey: ["zuzuu", "health"], queryFn: zuzuuApi.health, refetchInterval: 8000 });
+  const zuzuuHome = zuzuuHealth.data?.home === true;
+  const zuzuuStatus = useQuery({ queryKey: ["zuzuu", "status"], queryFn: zuzuuApi.status, refetchInterval: 8000, enabled: zuzuuHome });
+  const zuzuuEval = useQuery({ queryKey: ["zuzuu", "eval"], queryFn: zuzuuApi.evalRanked, refetchInterval: 8000, enabled: zuzuuHome });
+  const zuzuuActions = useQuery({ queryKey: ["zuzuu", "faculty", "actions"], queryFn: () => zuzuuApi.faculty("actions"), refetchInterval: 8000, enabled: zuzuuHome });
+  const openReview = useReviewOpen((s) => s.setOpen);
+  const reviewCount = pendingReviewCount(zuzuuEval.data?.ranked ?? [], zuzuuActions.data?.proposals ?? []);
   const [vaultPickerOpen, setVaultPickerOpen] = useState(false);
   const [vaultMenuOpen, setVaultMenuOpen] = useState(false);
 
@@ -58,6 +75,11 @@ export default function App() {
     fsEvents.start((path) => {
       void queryClient.invalidateQueries({ queryKey: ["dir", path] });
       void queryClient.invalidateQueries({ queryKey: ["git", "status"] });
+      // anything under the zuzuu home → refresh the agent queries (status,
+      // faculties, digest, eval …); the 4–8s polls remain the fallback
+      if (path === ".zuzuu" || path.startsWith(".zuzuu/")) {
+        void queryClient.invalidateQueries({ queryKey: ["zuzuu"] });
+      }
       // refresh any open preview whose file lives in the changed directory
       void queryClient.invalidateQueries({
         predicate: (q) =>
@@ -66,6 +88,11 @@ export default function App() {
           parentOf(q.queryKey[1]) === path,
       });
     });
+    // The home dir + its .live internals (depth-0 watches don't see into
+    // subdirs, so digest.md changes need the .live watch). watch() dedupes
+    // and re-subscribes after reconnects.
+    fsEvents.watch(".zuzuu");
+    fsEvents.watch(".zuzuu/.live");
   }, [workspace.data, queryClient]);
 
   const hasEditor = useEditor((s) => s.openFiles.length > 0);
@@ -226,7 +253,7 @@ export default function App() {
         <Panel defaultSize="22%" minSize="160px" maxSize="45%" className="bg-surface">
           <div className="flex h-full flex-col">
             <Bar border="b" className="!gap-0">
-              <ModeTabs options={["files", "search", "git"] as const} value={sidebarMode} onChange={setSidebarMode} />
+              <ModeTabs options={["files", "search", "git", "agent"] as const} value={sidebarMode} onChange={setSidebarMode} />
               <span className="ml-auto flex items-center gap-0.5">
                 {sidebarMode === "files" && (
                   <ActionMenu items={newMenu} title="New file or folder" iconPath="M8 3v10M3 8h10" />
@@ -234,7 +261,7 @@ export default function App() {
                 <IconButton
                   title="Refresh"
                   iconPath="M13 8a5 5 0 11-1.5-3.5M13 3v2.5h-2.5"
-                  onClick={() => queryClient.invalidateQueries({ queryKey: sidebarMode === "git" ? ["git"] : ["dir"] })}
+                  onClick={() => queryClient.invalidateQueries({ queryKey: sidebarMode === "git" ? ["git"] : sidebarMode === "agent" ? ["zuzuu"] : ["dir"] })}
                 />
               </span>
             </Bar>
@@ -243,8 +270,10 @@ export default function App() {
                 <FileTree />
               ) : sidebarMode === "search" ? (
                 <SearchPanel />
-              ) : (
+              ) : sidebarMode === "git" ? (
                 <GitPanel />
+              ) : (
+                <AgentPanel />
               )}
             </div>
           </div>
@@ -303,6 +332,16 @@ export default function App() {
           value={view === "faculties" ? "faculties" : "code"}
           onChange={(v) => setView(v === "faculties" ? "faculties" : "ide")}
         />
+        {/* zuzuu agent chip — active generation · pending review; opens the ceremony */}
+        {zuzuuHome && (
+          <button
+            onClick={() => openReview(true)}
+            className="shrink-0 hover:text-accent"
+            title="zuzuu — open review"
+          >
+            {agentChipLabel(zuzuuStatus.data?.activeGeneration, reviewCount)}
+          </button>
+        )}
         {/* connection health — hover reveals the live stats (files · sessions · uptime · mem) */}
         <span
           className="flex shrink-0 items-center gap-1.5"
@@ -418,6 +457,8 @@ export default function App() {
       />
       <WorkflowSaveModal />
       <WorkflowRunModal workflow={runWorkflow} onClose={() => setRunWorkflow(null)} />
+      {/* the one ReviewFlow mount — the chip, agent tab and Home all open this instance */}
+      <ReviewFlow />
       <DialogHost />
 
       {vaultPickerOpen && (
